@@ -9,6 +9,7 @@ import (
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/gocolly/colly"
+	"github.com/olekukonko/tablewriter"
 )
 
 // usage: go run robocop.go -verbose -host=https://example.com
@@ -24,11 +25,11 @@ func main() {
 	var verbose = flag.Bool("verbose", false, "turn on verbose mode")
 	var host = flag.String("host", "", "host to crawl")
 	flag.Parse()
-	spew.Dump(verbose)
 
 	url, _ := url.Parse(*host)
 
 	var report = make(map[string]string)
+	var tabularReport [][]string
 
 	// Dump a report if we are interrupted before running to completion.
 	channel := make(chan os.Signal, 1)
@@ -36,7 +37,7 @@ func main() {
 	go func() {
 		for sig := range channel {
 			spew.Dump(sig)
-			spew.Dump(report)
+			printReport(tabularReport)
 			os.Exit(1)
 		}
 	}()
@@ -53,6 +54,9 @@ func main() {
 		linkURL, _ := url.Parse(link)
 		if linkURL.Scheme != "https" && linkURL.Scheme != "mailto" {
 			report[link] = e.Request.URL.String()
+			linkURL.Scheme = "https"
+			row := []string{e.Request.URL.String(), link, linkURL.String(), "500"}
+			tabularReport = append(tabularReport, row)
 			if *verbose {
 				log.Printf("scheme %s in URL %v is not https.", linkURL.Scheme, link)
 			}
@@ -71,17 +75,17 @@ func main() {
 		})
 	}
 
-	//// Set max Parallelism and introduce a Random Delay
-	//c.Limit(&colly.LimitRule{
-	//Parallelism: 2,
-	//RandomDelay: 5 * time.Second,
-	//})
-
 	if err := c.Visit(url.String()); err != nil {
 		log.Printf("cannot visit %s because of %v", url.String(), err)
 	}
 	c.Wait()
+	printReport(tabularReport)
+}
 
-	// Print final report
-	spew.Dump(report)
+func printReport(report [][]string) {
+	linkReport := tablewriter.NewWriter(os.Stdout)
+	linkReport.SetHeader([]string{"Page", "Outbound Link", "Secure Link", "Status Code"})
+	linkReport.AppendBulk(report)
+
+	linkReport.Render() // Send output
 }
