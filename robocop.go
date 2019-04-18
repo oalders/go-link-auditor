@@ -28,8 +28,7 @@ func main() {
 
 	url, _ := url.Parse(*host)
 
-	var report = make(map[string]string)
-	var tabularReport [][]string
+	var report [][]string
 
 	// Dump a report if we are interrupted before running to completion.
 	channel := make(chan os.Signal, 1)
@@ -37,7 +36,7 @@ func main() {
 	go func() {
 		for sig := range channel {
 			spew.Dump(sig)
-			printReport(tabularReport)
+			printReport(report)
 			os.Exit(1)
 		}
 	}()
@@ -53,15 +52,12 @@ func main() {
 		link := e.Attr("href")
 		linkURL, _ := url.Parse(link)
 		if linkURL.Scheme != "https" && linkURL.Scheme != "mailto" {
-			report[link] = e.Request.URL.String()
 			linkURL.Scheme = "https"
 			row := []string{e.Request.URL.String(), link, linkURL.String(), "500"}
-			tabularReport = append(tabularReport, row)
-			if *verbose {
-				log.Printf("scheme %s in URL %v is not https.", linkURL.Scheme, link)
-			}
+			report = append(report, row)
 		}
 
+		// Visit any subsequent links we find
 		if err := c.Visit(link); err != nil {
 			if *verbose {
 				log.Printf("cannot visit %s because of %v", link, err)
@@ -75,17 +71,18 @@ func main() {
 		})
 	}
 
+	// Visit the first page to kick start the robot
 	if err := c.Visit(url.String()); err != nil {
 		log.Printf("cannot visit %s because of %v", url.String(), err)
 	}
 	c.Wait()
-	printReport(tabularReport)
+	printReport(report)
 }
 
 func printReport(report [][]string) {
-	linkReport := tablewriter.NewWriter(os.Stdout)
-	linkReport.SetHeader([]string{"Page", "Outbound Link", "Secure Link", "Status Code"})
-	linkReport.AppendBulk(report)
+	table := tablewriter.NewWriter(os.Stdout)
+	table.SetHeader([]string{"Page", "Outbound Link", "Secure Link", "Status Code"})
+	table.AppendBulk(report)
 
-	linkReport.Render() // Send output
+	table.Render() // Send output
 }
