@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"net/url"
 	"os"
@@ -48,6 +49,15 @@ func main() {
 	)
 	c.AllowURLRevisit = false
 
+	h := colly.NewCollector(
+		colly.Async(false),
+	)
+	h.AllowURLRevisit = false
+
+	c.OnResponse(func(r *colly.Response) {
+		log.Printf("HEAD: %v %v", r.Request.URL, r.StatusCode)
+	})
+
 	c.OnHTML("a[href]", func(e *colly.HTMLElement) {
 		link := e.Attr("href")
 		linkURL, _ := url.Parse(link)
@@ -61,6 +71,15 @@ func main() {
 		if err := c.Visit(link); err != nil {
 			if *verbose {
 				log.Printf("cannot visit %s because of %v", link, err)
+				if fmt.Sprintf("%v", err) == "Forbidden domain" {
+					if *verbose {
+						fmt.Printf("starting HEAD request for %v", link)
+					}
+					err = h.Head(link)
+					if err != nil {
+						log.Printf("cannot get HEAD request for %v because of %v", link, err)
+					}
+				}
 			}
 		}
 	})
@@ -76,6 +95,7 @@ func main() {
 		log.Printf("cannot visit %s because of %v", url.String(), err)
 	}
 	c.Wait()
+	h.Wait()
 	printReport(report)
 }
 
