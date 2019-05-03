@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/csv"
 	"flag"
 	"fmt"
 	"log"
@@ -9,6 +10,7 @@ import (
 	"os/signal"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/gocolly/colly"
@@ -55,7 +57,9 @@ func main() {
 	log.Println("head report:")
 	spew.Dump(heads)
 
-	printReport(finishReport(pages, heads))
+	rows := finishReport(pages, heads)
+	printReport(rows)
+	rows2csv(rows)
 }
 
 func makeColly(host string, heads headReport, pages pageReport, verbose bool) *colly.Collector {
@@ -157,6 +161,12 @@ func makeColly(host string, heads headReport, pages pageReport, verbose bool) *c
 		_ = c.Visit(foundURL.String())
 	})
 
+	_ = c.Limit(&colly.LimitRule{
+		DomainGlob:  host,
+		Parallelism: 2,
+		RandomDelay: 5 * time.Second,
+	})
+
 	return c
 }
 
@@ -194,7 +204,41 @@ func printReport(rows linkReport) {
 	table.Render() // Send output
 }
 
+func rows2csv(rows linkReport) {
+
+	{
+		w := csv.NewWriter(os.Stdout)
+		_ = w.WriteAll(rows) // calls Flush internally
+
+		if err := w.Error(); err != nil {
+			log.Fatalln("error writing csv:", err)
+		}
+	}
+
+	{
+
+		file, err := os.OpenFile(
+			"report.csv",
+			os.O_CREATE|os.O_WRONLY,
+			0666,
+		)
+
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer file.Close()
+
+		w := csv.NewWriter(file)
+		_ = w.WriteAll(rows) // calls Flush internally
+
+		if err := w.Error(); err != nil {
+			log.Fatalln("error writing csv:", err)
+		}
+	}
+}
+
 // https://play.golang.org/p/EzvhWMljku
+
 func truncateString(str string, num int) string {
 	bnoden := str
 	if len(str) > num {
