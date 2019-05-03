@@ -25,7 +25,6 @@ func main() {
 	var host = flag.String("host", "", "host to crawl")
 	flag.Parse()
 
-	var links linkReport
 	var heads = map[string]int{}
 	var pages = map[string]map[string]map[string]string{}
 
@@ -42,10 +41,9 @@ func main() {
 
 	u, _ := url.Parse(*host)
 
-	c := mainCollector(u.Host, &links, heads, pages, *verbose)
+	c := makeColly(u.Host, heads, pages, *verbose)
 
 	// Visit the first page to kick start the robot
-	// Error handling is in onError()
 	_ = c.Visit(u.String())
 
 	// Enable if async is true
@@ -59,7 +57,7 @@ func main() {
 	printReport(finishReport(pages, heads))
 }
 
-func mainCollector(host string, links *linkReport, heads headReport, pages pageReport, verbose bool) *colly.Collector {
+func makeColly(host string, heads headReport, pages pageReport, verbose bool) *colly.Collector {
 	// maybe create cache directory
 	cacheDir := ".url-cache"
 	if err := os.MkdirAll(cacheDir, 0700); err != nil {
@@ -115,11 +113,7 @@ func mainCollector(host string, links *linkReport, heads headReport, pages pageR
 				log.Printf("queuing HEAD request for %v\n", link)
 			}
 
-			// Error handling happens in OnError
-			err := c.Head(link.String())
-			if err != nil {
-				log.Printf("HEAD queue error in c.OnError: %v", err)
-			}
+			_ = c.Head(link.String())
 
 			// If the link is http, check if https is available
 			if link.Scheme == "http" {
@@ -139,7 +133,9 @@ func mainCollector(host string, links *linkReport, heads headReport, pages pageR
 
 		// Visit any subsequent links we find
 		// Error handling happens in the collector's onError()
-		log.Printf("adding %v to list of links to visit", foundURL.String())
+		if verbose {
+			log.Printf("adding %v to list of links to visit", foundURL.String())
+		}
 		_ = c.Visit(foundURL.String())
 	})
 
@@ -148,7 +144,8 @@ func mainCollector(host string, links *linkReport, heads headReport, pages pageR
 
 func finishReport(pages pageReport, heads headReport) linkReport {
 	//var links linkReport
-	spew.Dump(pages)
+	//log.Printf("pages -------")
+	//spew.Dump(pages)
 
 	rows := make([][]string, 0)
 
