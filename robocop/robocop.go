@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"sync"
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/gocolly/colly"
@@ -46,7 +47,7 @@ func main() {
 	// Visit the first page to kick start the robot
 	_ = c.Visit(u.String())
 
-	// Enable if async is true
+	// Enable if a(sync is true
 	if c.Async {
 		c.Wait()
 	}
@@ -58,18 +59,22 @@ func main() {
 }
 
 func makeColly(host string, heads headReport, pages pageReport, verbose bool) *colly.Collector {
+
+	// Use this for multiple maps. Not worried about contention.
+	var m = sync.Mutex{}
+
 	// maybe create cache directory
 	cacheDir := ".url-cache"
 	if err := os.MkdirAll(cacheDir, 0700); err != nil {
 		log.Printf("Cannot create dir %s because %v", cacheDir, err)
 	}
 
-	// XXX fix concurrent map writes before enabling async
 	c := colly.NewCollector(
-		colly.Async(false),
+		colly.Async(true),
 		colly.CacheDir(cacheDir),
 		colly.DisallowedDomains("facebook.com"),
 	)
+
 	c.AllowURLRevisit = false
 	c.ParseHTTPErrorResponse = true
 
@@ -85,11 +90,14 @@ func makeColly(host string, heads headReport, pages pageReport, verbose bool) *c
 	})
 
 	c.OnResponse(func(r *colly.Response) {
+		m.Lock()
 		heads[r.Request.URL.String()] = r.StatusCode
+		m.Unlock()
+
 		if r.Request.URL.String() != r.Ctx.Get("url") {
 			heads[r.Ctx.Get("url")] = r.StatusCode
 		}
-		// Looks like we never hit this condition
+		// Looks like we never hit this condition :(
 		if r.StatusCode > 299 && r.StatusCode < 399 {
 			fmt.Printf("redirecting  %v to %v\n", r.Ctx.Get("url"), r.Request.URL.String())
 			heads[r.Ctx.Get("url")] = r.StatusCode
@@ -98,7 +106,10 @@ func makeColly(host string, heads headReport, pages pageReport, verbose bool) *c
 	})
 
 	c.OnError(func(r *colly.Response, err error) {
+		m.Lock()
 		heads[r.Request.URL.String()] = r.StatusCode
+		m.Unlock()
+
 		var link = r.Request.URL
 		if verbose {
 			log.Printf("cannot visit %s because of %v", link, err)
@@ -115,7 +126,6 @@ func makeColly(host string, heads headReport, pages pageReport, verbose bool) *c
 				link.Scheme = "https"
 				_ = c.Head(link.String())
 			}
-
 		}
 	})
 
@@ -123,8 +133,14 @@ func makeColly(host string, heads headReport, pages pageReport, verbose bool) *c
 		a := e.Request.AbsoluteURL(e.Attr("href"))
 		foundURL, _ := url.Parse(a)
 
-		pages[e.Request.URL.String()] = map[string]string{}
+		m.Lock()
+		u := e.Request.URL.String()
+
+		if _, ok := pages[u]; !ok {
+			pages[e.Request.URL.String()] = map[string]string{}
+		}
 		pages[e.Request.URL.String()][foundURL.String()] = ""
+		m.Unlock()
 
 		// Visit any subsequent links we find
 		// Error handling happens in the collector's onError()
