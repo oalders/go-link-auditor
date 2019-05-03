@@ -18,7 +18,7 @@ import (
 
 type linkReport [][]string
 type headReport = map[string]int
-type pageReport = map[string]map[string]map[string]string
+type pageReport = map[string]map[string]string
 
 func main() {
 	var verbose = flag.Bool("verbose", false, "turn on verbose mode")
@@ -26,7 +26,7 @@ func main() {
 	flag.Parse()
 
 	var heads = map[string]int{}
-	var pages = map[string]map[string]map[string]string{}
+	var pages = map[string]map[string]string{}
 
 	// Dump a report if we are interrupted before running to completion.
 	channel := make(chan os.Signal, 1)
@@ -68,6 +68,7 @@ func makeColly(host string, heads headReport, pages pageReport, verbose bool) *c
 	c := colly.NewCollector(
 		colly.Async(false),
 		colly.CacheDir(cacheDir),
+		colly.DisallowedDomains("facebook.com"),
 	)
 	c.AllowURLRevisit = false
 	c.ParseHTTPErrorResponse = true
@@ -81,15 +82,6 @@ func makeColly(host string, heads headReport, pages pageReport, verbose bool) *c
 			}
 			r.Abort()
 		}
-
-		var httpsLink string
-
-		if r.URL.Scheme == "http" {
-			https, _ := url.Parse(r.URL.String()) // deep copy
-			https.Scheme = "https"
-			httpsLink = https.String()
-		}
-		_ = c.Visit(httpsLink)
 	})
 
 	c.OnResponse(func(r *colly.Response) {
@@ -97,7 +89,10 @@ func makeColly(host string, heads headReport, pages pageReport, verbose bool) *c
 		if r.Request.URL.String() != r.Ctx.Get("url") {
 			heads[r.Ctx.Get("url")] = r.StatusCode
 		}
-		if r.StatusCode > 299 || r.StatusCode < 399 {
+		// Looks like we never hit this condition
+		if r.StatusCode > 299 && r.StatusCode < 399 {
+			fmt.Printf("redirecting  %v to %v\n", r.Ctx.Get("url"), r.Request.URL.String())
+			heads[r.Ctx.Get("url")] = r.StatusCode
 			_ = c.Head(r.Headers.Get("Location"))
 		}
 	})
@@ -116,7 +111,7 @@ func makeColly(host string, heads headReport, pages pageReport, verbose bool) *c
 			_ = c.Head(link.String())
 
 			// If the link is http, check if https is available
-			if link.Scheme == "http" {
+			if link.Scheme == "http" && r.Request.Method == "HEAD" {
 				link.Scheme = "https"
 				_ = c.Head(link.String())
 			}
@@ -128,13 +123,20 @@ func makeColly(host string, heads headReport, pages pageReport, verbose bool) *c
 		a := e.Request.AbsoluteURL(e.Attr("href"))
 		foundURL, _ := url.Parse(a)
 
-		pages[e.Request.URL.String()] = map[string]map[string]string{}
-		pages[e.Request.URL.String()][foundURL.String()] = nil
+		pages[e.Request.URL.String()] = map[string]string{}
+		pages[e.Request.URL.String()][foundURL.String()] = ""
 
 		// Visit any subsequent links we find
 		// Error handling happens in the collector's onError()
 		if verbose {
 			log.Printf("adding %v to list of links to visit", foundURL.String())
+		}
+
+		if foundURL.Host == host {
+
+			// Avoid long URLs like Facebook share links
+			foundURL.RawQuery = ""
+			foundURL.Fragment = ""
 		}
 		_ = c.Visit(foundURL.String())
 	})
@@ -143,39 +145,47 @@ func makeColly(host string, heads headReport, pages pageReport, verbose bool) *c
 }
 
 func finishReport(pages pageReport, heads headReport) linkReport {
-	//var links linkReport
-	//log.Printf("pages -------")
-	//spew.Dump(pages)
-
 	rows := make([][]string, 0)
 
-	for url := range pages {
+	for sourcePage := range pages {
 
-		spew.Dump(pages[url])
-		//for linksOnPage, _ := range pages{url} {
-		row := make([]string, 4)
+		spew.Dump(pages[sourcePage])
+		for link := range pages[sourcePage] {
+			row := make([]string, 5)
 
-		row[0] = url
-		row[1] = strconv.Itoa(heads[url])
-		rows = append(rows, row)
-		//}
+			row[0] = sourcePage
+			row[1] = link
+			row[2] = strconv.Itoa(heads[link])
 
-		// SSL links will not be available if the original page already has SSL
-		//if ssl != "" {
-		//ssl = strconv.Itoa(heads[v[2]])
-		//}
-		//v = append(v, strconv.Itoa(heads[v[1]]), ssl)
-
-		//pages = append(pages,
-		//links[i] = v
+			linkURL, _ := url.Parse(link)
+			if linkURL.Scheme == "http" {
+				linkURL.Scheme = "https"
+				row[3] = linkURL.String()
+				row[4] = strconv.Itoa(heads[row[3]])
+			}
+			rows = append(rows, row)
+		}
 	}
+	spew.Dump(rows)
 	return rows
 }
 
 func printReport(rows linkReport) {
 	table := tablewriter.NewWriter(os.Stdout)
-	table.SetHeader([]string{"Source Page", "Link", "SSL Link", "Link Status", "SSL Status"})
+	table.SetHeader([]string{"Source Page", "Link", "Status", "SSL", "SSL Status"})
 	table.AppendBulk(rows)
 
 	table.Render() // Send output
+}
+
+// https://play.golang.org/p/EzvhWMljku
+func truncateString(str string, num int) string {
+	bnoden := str
+	if len(str) > num {
+		if num > 3 {
+			num -= 3
+		}
+		bnoden = str[0:num] + "..."
+	}
+	return bnoden
 }
