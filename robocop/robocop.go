@@ -24,11 +24,12 @@ type headReport = map[string]int
 type pageReport = map[string]map[string]string
 
 func main() {
-	var randomDelay int
+	var maxVisits, randomDelay int
 	var verbose bool
 	var host string
 
 	flag.IntVar(&randomDelay, "random-delay", 1, "random delay (in seconds)")
+	flag.IntVar(&maxVisits, "max-visits", 10000, "maximum number of pages to scrape")
 	flag.BoolVar(&verbose, "verbose", false, "turn on verbose mode")
 	flag.StringVar(&host, "host", "", "host to crawl")
 	flag.Parse()
@@ -42,17 +43,18 @@ func main() {
 	go func() {
 		for sig := range channel {
 			spew.Dump(sig)
-			printReport(finishReport(pages, heads))
+			//printReport(finishReport(pages, heads))
 			os.Exit(1)
 		}
 	}()
 
 	u, _ := url.Parse(host)
 
-	c := makeColly(u.Host, heads, pages, randomDelay, verbose)
+	c := makeColly(u.Host, heads, pages, &maxVisits, randomDelay, verbose)
 
 	// Visit the first page to kick start the robot
 	_ = c.Visit(u.String())
+	maxVisits--
 
 	// Enable if a(sync is true
 	if c.Async {
@@ -60,14 +62,20 @@ func main() {
 	}
 
 	log.Println("head report:")
-	spew.Dump(heads)
 
 	rows := finishReport(pages, heads)
 	printReport(rows)
-	rows2csv(rows)
+	//rows2csv(rows)
 }
 
-func makeColly(host string, heads headReport, pages pageReport, randomDelay int, verbose bool) *colly.Collector {
+func makeColly(
+	host string,
+	heads headReport,
+	pages pageReport,
+	maxVisits *int,
+	randomDelay int,
+	verbose bool,
+) *colly.Collector {
 
 	// Use this for multiple maps. Not worried about contention.
 	var m = sync.Mutex{}
@@ -92,10 +100,22 @@ func makeColly(host string, heads headReport, pages pageReport, randomDelay int,
 		if r.Method == "GET" && r.URL.Host != "" && r.URL.Host != host {
 			_ = c.Head(r.URL.String())
 			if verbose {
-				log.Printf("aborting %v", r.URL)
+				log.Printf("aborting %v and converting to HEAD", r.URL)
+			}
+			r.Abort()
+			return
+		}
+		m.Lock()
+		if *maxVisits > 0 {
+			fmt.Printf("max visits is %v visiting %v\n", *maxVisits, r.URL.String())
+			*maxVisits--
+		} else {
+			if verbose {
+				log.Printf("aborting %v over max visits", r.URL)
 			}
 			r.Abort()
 		}
+		m.Unlock()
 	})
 
 	c.OnResponse(func(r *colly.Response) {
@@ -162,6 +182,7 @@ func makeColly(host string, heads headReport, pages pageReport, randomDelay int,
 		//foundURL.RawQuery = ""
 		//foundURL.Fragment = ""
 		//}
+
 		_ = c.Visit(foundURL.String())
 	})
 
@@ -179,7 +200,6 @@ func finishReport(pages pageReport, heads headReport) linkReport {
 
 	for sourcePage := range pages {
 
-		spew.Dump(pages[sourcePage])
 		for link := range pages[sourcePage] {
 			row := make([]string, 5)
 
@@ -196,7 +216,6 @@ func finishReport(pages pageReport, heads headReport) linkReport {
 			rows = append(rows, row)
 		}
 	}
-	spew.Dump(rows)
 	return rows
 }
 
