@@ -24,8 +24,13 @@ type headReport = map[string]int
 type pageReport = map[string]map[string]string
 
 func main() {
-	var verbose = flag.Bool("verbose", false, "turn on verbose mode")
-	var host = flag.String("host", "", "host to crawl")
+	var randomDelay int
+	var verbose bool
+	var host string
+
+	flag.IntVar(&randomDelay, "random-delay", 1, "random delay (in seconds)")
+	flag.BoolVar(&verbose, "verbose", false, "turn on verbose mode")
+	flag.StringVar(&host, "host", "", "host to crawl")
 	flag.Parse()
 
 	var heads = map[string]int{}
@@ -42,9 +47,9 @@ func main() {
 		}
 	}()
 
-	u, _ := url.Parse(*host)
+	u, _ := url.Parse(host)
 
-	c := makeColly(u.Host, heads, pages, *verbose)
+	c := makeColly(u.Host, heads, pages, randomDelay, verbose)
 
 	// Visit the first page to kick start the robot
 	_ = c.Visit(u.String())
@@ -62,7 +67,7 @@ func main() {
 	rows2csv(rows)
 }
 
-func makeColly(host string, heads headReport, pages pageReport, verbose bool) *colly.Collector {
+func makeColly(host string, heads headReport, pages pageReport, randomDelay int, verbose bool) *colly.Collector {
 
 	// Use this for multiple maps. Not worried about contention.
 	var m = sync.Mutex{}
@@ -152,19 +157,18 @@ func makeColly(host string, heads headReport, pages pageReport, verbose bool) *c
 			log.Printf("adding %v to list of links to visit", foundURL.String())
 		}
 
-		if foundURL.Host == host {
-
-			// Avoid long URLs like Facebook share links
-			foundURL.RawQuery = ""
-			foundURL.Fragment = ""
-		}
+		//if foundURL.Host == host {
+		//// Avoid long URLs like Facebook share links
+		//foundURL.RawQuery = ""
+		//foundURL.Fragment = ""
+		//}
 		_ = c.Visit(foundURL.String())
 	})
 
 	_ = c.Limit(&colly.LimitRule{
 		DomainGlob:  host,
 		Parallelism: 2,
-		RandomDelay: 5 * time.Second,
+		RandomDelay: time.Duration(randomDelay) * time.Second,
 	})
 
 	return c
@@ -235,17 +239,4 @@ func rows2csv(rows linkReport) {
 			log.Fatalln("error writing csv:", err)
 		}
 	}
-}
-
-// https://play.golang.org/p/EzvhWMljku
-
-func truncateString(str string, num int) string {
-	bnoden := str
-	if len(str) > num {
-		if num > 3 {
-			num -= 3
-		}
-		bnoden = str[0:num] + "..."
-	}
-	return bnoden
 }
