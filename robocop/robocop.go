@@ -25,11 +25,12 @@ type pageReport = map[string]map[string]string
 
 func main() {
 	var maxVisits, randomDelay int
-	var verbose bool
+	var csv, verbose bool
 	var host string
 
 	flag.IntVar(&randomDelay, "random-delay", 1, "random delay (in seconds)")
 	flag.IntVar(&maxVisits, "max-visits", 10000, "maximum number of pages to scrape")
+	flag.BoolVar(&csv, "csv", false, "dump data in CSV format")
 	flag.BoolVar(&verbose, "verbose", false, "turn on verbose mode")
 	flag.StringVar(&host, "host", "", "host to crawl")
 	flag.Parse()
@@ -65,7 +66,9 @@ func main() {
 
 	rows := finishReport(pages, heads)
 	printReport(rows)
-	//rows2csv(rows)
+	if csv {
+		rows2csv(rows)
+	}
 }
 
 func makeColly(
@@ -100,15 +103,17 @@ func makeColly(
 		if r.Method == "GET" && r.URL.Host != "" && r.URL.Host != host {
 			_ = c.Head(r.URL.String())
 			if verbose {
-				log.Printf("aborting %v and converting to HEAD", r.URL)
+				log.Printf("HEAD %v", r.URL)
 			}
 			r.Abort()
 			return
 		}
 		m.Lock()
-		if *maxVisits > 0 {
-			fmt.Printf("max visits is %v visiting %v\n", *maxVisits, r.URL.String())
-			*maxVisits--
+		if *maxVisits > 0 || r.Method == "HEAD" {
+			fmt.Printf("max visits is %v %v %v\n", *maxVisits, r.Method, r.URL.String())
+			if r.Method == "GET" {
+				*maxVisits--
+			}
 		} else {
 			if verbose {
 				log.Printf("aborting %v over max visits", r.URL)
@@ -162,6 +167,13 @@ func makeColly(
 		a := e.Request.AbsoluteURL(e.Attr("href"))
 		foundURL, _ := url.Parse(a)
 
+		if foundURL.Scheme == "mailto" {
+			if verbose {
+				log.Printf("Skipping %v", foundURL.String())
+			}
+			return
+		}
+
 		m.Lock()
 		u := e.Request.URL.String()
 
@@ -174,7 +186,7 @@ func makeColly(
 		// Visit any subsequent links we find
 		// Error handling happens in the collector's onError()
 		if verbose {
-			log.Printf("adding %v to list of links to visit", foundURL.String())
+			log.Printf("adding %v to list of links to GET", foundURL.String())
 		}
 
 		//if foundURL.Host == host {
@@ -198,20 +210,34 @@ func makeColly(
 func finishReport(pages pageReport, heads headReport) linkReport {
 	rows := make([][]string, 0)
 
+	// Weed out success URLs for now
 	for sourcePage := range pages {
 
 		for link := range pages[sourcePage] {
 			row := make([]string, 5)
 
+			linkStatusCode := heads[link]
+
+			// XXX find out why some HEAD requests aren't happening
+			if linkStatusCode == 200 || linkStatusCode == 0 {
+				continue
+			}
+
 			row[0] = sourcePage
 			row[1] = link
-			row[2] = strconv.Itoa(heads[link])
+			row[2] = strconv.Itoa(linkStatusCode)
 
 			linkURL, _ := url.Parse(link)
 			if linkURL.Scheme == "http" {
 				linkURL.Scheme = "https"
-				row[3] = linkURL.String()
-				row[4] = strconv.Itoa(heads[row[3]])
+				httpsLinkStatusCode := heads[row[3]]
+				if httpsLinkStatusCode == 200 {
+					continue
+				}
+
+				if httpsLinkStatusCode != 0 {
+					row[4] = strconv.Itoa(httpsLinkStatusCode)
+				}
 			}
 			rows = append(rows, row)
 		}
@@ -221,7 +247,7 @@ func finishReport(pages pageReport, heads headReport) linkReport {
 
 func printReport(rows linkReport) {
 	table := tablewriter.NewWriter(os.Stdout)
-	table.SetHeader([]string{"Source Page", "Link", "Status", "SSL", "SSL Status"})
+	table.SetHeader([]string{"Source Page", "Link", "Status", "SSL Status"})
 	table.AppendBulk(rows)
 
 	table.Render() // Send output
