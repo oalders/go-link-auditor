@@ -25,12 +25,13 @@ type pageReport = map[string]map[string]string
 
 func main() {
 	var maxVisits, randomDelay int
-	var csv, verbose bool
+	var csv, onlyFailures, verbose bool
 	var host string
 
 	flag.IntVar(&randomDelay, "random-delay", 1, "random delay (in seconds)")
 	flag.IntVar(&maxVisits, "max-visits", 10000, "maximum number of pages to scrape")
 	flag.BoolVar(&csv, "csv", false, "dump data in CSV format")
+	flag.BoolVar(&onlyFailures, "only-failures", false, "show only failures")
 	flag.BoolVar(&verbose, "verbose", false, "turn on verbose mode")
 	flag.StringVar(&host, "host", "", "host to crawl")
 	flag.Parse()
@@ -64,7 +65,7 @@ func main() {
 
 	log.Println("head report:")
 
-	rows := finishReport(pages, heads)
+	rows := finishReport(pages, heads, onlyFailures)
 	printReport(rows)
 	if csv {
 		rows2csv(rows)
@@ -207,7 +208,12 @@ func makeColly(
 	return c
 }
 
-func finishReport(pages pageReport, heads headReport) linkReport {
+/*
+Report format:
+source page | link found on page | link status code | HTTPS link (if previous link HTTP) | HTTPS link status code
+*/
+
+func finishReport(pages pageReport, heads headReport, onlyFailures bool) linkReport {
 	rows := make([][]string, 0)
 
 	// Weed out success URLs for now
@@ -231,7 +237,7 @@ func finishReport(pages pageReport, heads headReport) linkReport {
 			if linkURL.Scheme == "http" {
 				linkURL.Scheme = "https"
 				httpsLinkStatusCode := heads[row[3]]
-				if httpsLinkStatusCode == 200 {
+				if onlyFailures && httpsLinkStatusCode == 200 {
 					continue
 				}
 
